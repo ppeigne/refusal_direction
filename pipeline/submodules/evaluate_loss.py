@@ -1,6 +1,7 @@
 import torch
 import itertools
 import json
+import gc
 
 from datasets import load_dataset
 
@@ -130,9 +131,14 @@ def evaluate_loss(
     n_batches=256,
     max_seq_length=256,
     dataset_labels=["pile", "alpaca", "alpaca_custom_completions"],
-    completions_file_path=None
+    completions_file_path=None,
+    language=None
 ):
     result = {}
+
+    # Adjust batch size for non-English languages that might use more tokens
+    if language and language not in ["en", "fr", "es", "de"]:
+        batch_size = max(1, batch_size // 2)  # Reduce batch size for languages with larger token counts
 
     for label in dataset_labels:
         if label == 'pile':
@@ -154,14 +160,58 @@ def evaluate_loss(
         else:
             raise ValueError(f"Unknown dataset label: {label}")
 
-        ce_loss, perplexity, n_tokens = compute_loss_over_dataset(model_base.model, model_base.tokenizer, dataset_iterator, fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, n_batches=n)
-        print(f"{label.upper()} DATASET:")
-        print(f"CE loss: {ce_loss.item()}, Perplexity: {perplexity.item()}, N tokens: {n_tokens.item()}")
+        try:
+            ce_loss, perplexity, n_tokens = compute_loss_over_dataset(
+                model_base.model, model_base.tokenizer, dataset_iterator, 
+                fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, n_batches=n
+            )
+            print(f"{label.upper()} DATASET:")
+            print(f"CE loss: {ce_loss.item()}, Perplexity: {perplexity.item()}, N tokens: {n_tokens.item()}")
 
-        result[label] = {
-            "ce_loss": ce_loss.item(),
-            "perplexity": perplexity.item(),
-            "n_tokens": n_tokens.item()
-        }
+            result[label] = {
+                "ce_loss": ce_loss.item(),
+                "perplexity": perplexity.item(),
+                "n_tokens": n_tokens.item()
+            }
+        except RuntimeError as e:
+            if "CUDA out of memory" in str(e):
+                print(f"OOM error for {label} dataset. Trying with smaller batch size.")
+                
+                # Clear GPU memory
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize()
+                
+                # Retry with half the batch size
+                smaller_batch_size = max(1, batch_size // 2)
+                
+                if label == 'pile':
+                    dataset_iterator = batch_iterator_pile(model_base.tokenizer, batch_size=smaller_batch_size, max_length=max_seq_length)
+                elif label == 'alpaca':
+                    dataset_iterator = batch_iterator_alpaca(model_base.tokenize_instructions_fn, batch_size=smaller_batch_size, eoi_toks=torch.tensor(model_base.eoi_toks))
+                elif label == 'alpaca_custom_completions':
+                    dataset_iterator = batch_iterator_custom_completions(
+                        completions_file_path=completions_file_path,
+                        tokenize_instructions_fn=model_base.tokenize_instructions_fn,
+                        batch_size=smaller_batch_size,
+                        eoi_toks=torch.tensor(model_base.eoi_toks)
+                    )
+                
+                ce_loss, perplexity, n_tokens = compute_loss_over_dataset(
+                    model_base.model, model_base.tokenizer, dataset_iterator, 
+                    fwd_pre_hooks=fwd_pre_hooks, fwd_hooks=fwd_hooks, n_batches=n
+                )
+                print(f"{label.upper()} DATASET (with reduced batch size):")
+                print(f"CE loss: {ce_loss.item()}, Perplexity: {perplexity.item()}, N tokens: {n_tokens.item()}")
+
+                result[label] = {
+                    "ce_loss": ce_loss.item(),
+                    "perplexity": perplexity.item(),
+                    "n_tokens": n_tokens.item(),
+                    "reduced_batch_size": True
+                }
+            else:
+                raise e
 
     return result
