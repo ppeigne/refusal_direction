@@ -81,16 +81,17 @@ class LlamaGuard2Classifier:
     MODEL = "together_ai/Meta-Llama/llamaguard-2-8B"
 
     def __init__(self, api_key: str):
-        self._tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-Guard-2-8B")
+        # Remove direct HF model loading since the model is protected
+        # self._tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-Guard-2-8B")
+        # Instead, use Together AI's API directly
         self._api_key = api_key
 
     def _build_classifier_input(self, prompt: str, response: str) -> list[dict[str, str]]:
-        chat = [
+        # Simplify to just use the basic chat format
+        return [
             {"role": "user", "content": prompt},
             {"role": "assistant", "content": response},
         ]
-        templated_chat = self._tokenizer.apply_chat_template(chat, tokenize=False)
-        return [{"role": "user", "content": templated_chat}]
 
     def __call__(self, prompts: list[str], responses: list[str]) -> list[bool]:
         return self.classify_responses(prompts, responses)
