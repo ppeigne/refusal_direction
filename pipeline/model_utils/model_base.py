@@ -3,6 +3,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
 from tqdm import tqdm
 from torch import Tensor
 from jaxtyping import Int, Float
+from typing import List, Dict, Any, Optional
 
 from pipeline.utils.hook_utils import add_hooks
 

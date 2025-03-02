@@ -6,7 +6,7 @@ from torch import Tensor
 from jaxtyping import Int, Float
 
 from pipeline.utils.utils import get_orthogonalized_matrix
-from pipeline.model_utils.model_base import ModelBase, ModelResult
+from pipeline.model_utils.model_base import ModelBase
 
 # Qwen chat templates are based on
 # - Official examples from Qwen repo: https://github.com/QwenLM/Qwen/blob/5aa84bdfd3237b37f01bc88cd49b3279b9a71d0b/examples/vllm_wrapper.py#L32
@@ -157,56 +157,6 @@ class QwenModel(ModelBase):
         
         return encodings
 
-    def _model_to_device(self, model) -> None:
-        """
-        Move model to device. Qwen has its own device logic, so we don't need to override this.
-        """
-        gpu_available = torch.cuda.is_available()
-        self.device = torch.device('cuda' if gpu_available else 'cpu')
-        model = model.to(self.device)
-        return model
-
-    def generate(self, prompts: List[str], **kwargs) -> ModelResult:
-        """
-        Use Qwen model to generate completions for the given prompts.
-        """
-        messages = []
-        for prompt in prompts:
-            message = [
-                {"role": "user", "content": prompt.strip()}
-            ]
-            messages.append(message)
-            
-        inputs = self.tokenizer.apply_chat_template(
-            messages,
-            add_generation_prompt=True,
-            return_tensors="pt",
-            padding=True
-        ).to(self.device)
-        
-        default_kwargs = {
-            "do_sample": False,
-            "max_new_tokens": 256,
-            "pad_token_id": self.tokenizer.eos_token_id
-        }
-        default_kwargs.update(kwargs)
-        
-        with torch.no_grad():
-            outputs = self.model.generate(
-                inputs=inputs["input_ids"], 
-                attention_mask=inputs["attention_mask"],
-                **default_kwargs
-            )
-        
-        generated_texts = []
-        for i, prompt in enumerate(prompts):
-            # Get only the newly generated tokens
-            new_tokens = outputs[i, inputs.shape[1]:]
-            completion = self.tokenizer.decode(new_tokens, skip_special_tokens=True)
-            generated_texts.append(completion)
-        
-        return ModelResult(completions=generated_texts)
-
     def _load_model(self, model_name_or_path: str) -> PreTrainedModel:
         """
         Load model from HuggingFace.
@@ -239,8 +189,10 @@ class QwenModel(ModelBase):
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, trust_remote_code=True)
         return tokenizer
 
-    @property
-    def eoi_toks(self) -> List[int]:
+    def _get_tokenize_instructions_fn(self):
+        return self.tokenize_instructions_fn
+
+    def _get_eoi_toks(self):
         """
         Return the tokens which indicate end-of-instruction.
         For Qwen models, this is the assistant start tokens.
@@ -248,46 +200,43 @@ class QwenModel(ModelBase):
         # Try to identify assistant tokens by looking at chat template
         # This is a heuristic approach since different Qwen versions might have different tokens
         if "qwen2" in self.model_name_or_path.lower():
-            # For Qwen2 models, usually has <|assistant|> token
-            assistant_token = self.tokenizer.encode("<|assistant|>", add_special_tokens=False)
-            return assistant_token
-        else:
-            # For Qwen1 models
-            assistant_token = self.tokenizer.encode("<|im_start|>assistant\n", add_special_tokens=False)
-            return assistant_token
-
-    @property
-    def model_block_modules(self) -> List[torch.nn.Module]:
-        """
-        Return the modules that correspond to transformer blocks in the model.
-        """
-        if "qwen2" in self.model_name_or_path.lower():
             # For Qwen2 models
-            return self.model.model.layers
+            return self.tokenizer.encode("<|assistant|>", add_special_tokens=False)
         else:
             # For Qwen1 models
-            return self.model.transformer.h
-
-    def _get_tokenize_instructions_fn(self):
-        return functools.partial(tokenize_instructions_qwen_chat, tokenizer=self.tokenizer, system=None, include_trailing_whitespace=True)
-
-    def _get_eoi_toks(self):
-        return self.tokenizer.encode(QWEN_CHAT_TEMPLATE.split("{instruction}")[-1])
+            return self.tokenizer.encode("<|im_start|>assistant", add_special_tokens=False)
 
     def _get_refusal_toks(self):
         return QWEN_REFUSAL_TOKS
 
     def _get_model_block_modules(self):
-        return self.model_block_modules
+        if "qwen2" in self.model_name_or_path.lower():
+            return self.model.model.layers
+        else:
+            return self.model.transformer.h
 
     def _get_attn_modules(self):
-        return torch.nn.ModuleList([block_module.attn for block_module in self.model_block_modules])
-    
+        modules = []
+        for block in self.model_block_modules:
+            if "qwen2" in self.model_name_or_path.lower():
+                modules.append(block.self_attn)
+            else:
+                modules.append(block.attn)
+        return torch.nn.ModuleList(modules)
+
     def _get_mlp_modules(self):
-        return torch.nn.ModuleList([block_module.mlp for block_module in self.model_block_modules])
+        return torch.nn.ModuleList([block.mlp for block in self.model_block_modules])
 
     def _get_orthogonalization_mod_fn(self, direction: Float[Tensor, "d_model"]):
-        return functools.partial(orthogonalize_qwen_weights, direction=direction)
-    
-    def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff, layer):
-        return functools.partial(act_add_qwen_weights, direction=direction, coeff=coeff, layer=layer)
+        if "qwen2" in self.model_name_or_path.lower():
+            # Implementation for Qwen2 would go here
+            raise NotImplementedError("Orthogonalization for Qwen2 models not yet implemented")
+        else:
+            return functools.partial(orthogonalize_qwen_weights, direction=direction)
+
+    def _get_act_add_mod_fn(self, direction: Float[Tensor, "d_model"], coeff: float, layer: int):
+        if "qwen2" in self.model_name_or_path.lower():
+            # Implementation for Qwen2 would go here
+            raise NotImplementedError("Activation addition for Qwen2 models not yet implemented")
+        else:
+            return functools.partial(act_add_qwen_weights, direction=direction, coeff=coeff, layer=layer)
