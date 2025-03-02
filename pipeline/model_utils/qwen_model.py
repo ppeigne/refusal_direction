@@ -125,37 +125,13 @@ class QwenModel(ModelBase):
         """
         Tokenize instructions for Qwen models.
         """
-        if outputs is not None:
-            messages = []
-            for instruction, output in zip(instructions, outputs):
-                message = [
-                    {"role": "user", "content": instruction.strip()},
-                    {"role": "assistant", "content": output.strip()}
-                ]
-                messages.append(message)
-            
-            encodings = self.tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=False,
-                return_tensors="pt",
-                padding=True
-            )
-        else:
-            messages = []
-            for instruction in instructions:
-                message = [
-                    {"role": "user", "content": instruction.strip()}
-                ]
-                messages.append(message)
-            
-            encodings = self.tokenizer.apply_chat_template(
-                messages,
-                add_generation_prompt=True,
-                return_tensors="pt",
-                padding=True
-            )
-        
-        return encodings
+        return tokenize_instructions_qwen_chat(
+            tokenizer=self.tokenizer,
+            instructions=instructions,
+            outputs=outputs,
+            system=None,
+            include_trailing_whitespace=True
+        )
 
     def _load_model(self, model_name_or_path: str) -> PreTrainedModel:
         """
