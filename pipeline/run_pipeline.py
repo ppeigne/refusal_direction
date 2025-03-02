@@ -46,25 +46,58 @@ def load_and_sample_datasets(cfg):
     harmless_val = random.sample(load_dataset_split(harmtype='harmless', split='val', instructions_only=True), cfg.n_val)
     return harmful_train, harmless_train, harmful_val, harmless_val
 
-def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val):
+def filter_data(cfg, model_base, harmful_train, harmless_train, harmful_val, harmless_val, batch_size=8):
     """
-    Filter datasets based on refusal scores.
-
-    Returns:
-        Filtered datasets: (harmful_train, harmless_train, harmful_val, harmless_val)
+    Filter datasets based on refusal scores with Qwen-specific memory optimizations.
     """
     def filter_examples(dataset, scores, threshold, comparison):
         return [inst for inst, score in zip(dataset, scores.tolist()) if comparison(score, threshold)]
 
+    def get_scores_in_batches(model, dataset, tokenize_fn, refusal_toks):
+        all_scores = []
+        
+        # Use smaller batch size and mixed precision for Qwen2
+        with torch.cuda.amp.autocast():  # Enable mixed precision
+            for i in range(0, len(dataset), batch_size):
+                batch = dataset[i:i+batch_size]
+                try:
+                    scores = get_refusal_scores(model, batch, tokenize_fn, refusal_toks, batch_size=batch_size)
+                    all_scores.extend(scores.tolist())
+                except RuntimeError as e:
+                    if "CUDA out of memory" in str(e):
+                        # If OOM occurs, try with even smaller batch
+                        torch.cuda.empty_cache()
+                        smaller_batch = batch[:len(batch)//2]
+                        scores = get_refusal_scores(model, smaller_batch, tokenize_fn, refusal_toks, batch_size=batch_size//2)
+                        all_scores.extend(scores.tolist())
+                        # Process remaining half
+                        scores = get_refusal_scores(model, batch[len(batch)//2:], tokenize_fn, refusal_toks, batch_size=batch_size//2)
+                        all_scores.extend(scores.tolist())
+                    else:
+                        raise e
+                
+                # Clear memory between batches
+                torch.cuda.empty_cache()
+            
+        return torch.tensor(all_scores, device=model.device)
+
     if cfg.filter_train:
-        harmful_train_scores = get_refusal_scores(model_base.model, harmful_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmless_train_scores = get_refusal_scores(model_base.model, harmless_train, model_base.tokenize_instructions_fn, model_base.refusal_toks)
+        harmful_train_scores = get_scores_in_batches(model_base.model, harmful_train, 
+                                                   model_base.tokenize_instructions_fn, model_base.refusal_toks)
+        torch.cuda.empty_cache()  # Clear between datasets
+        
+        harmless_train_scores = get_scores_in_batches(model_base.model, harmless_train,
+                                                    model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmful_train = filter_examples(harmful_train, harmful_train_scores, 0, lambda x, y: x > y)
         harmless_train = filter_examples(harmless_train, harmless_train_scores, 0, lambda x, y: x < y)
 
     if cfg.filter_val:
-        harmful_val_scores = get_refusal_scores(model_base.model, harmful_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
-        harmless_val_scores = get_refusal_scores(model_base.model, harmless_val, model_base.tokenize_instructions_fn, model_base.refusal_toks)
+        harmful_val_scores = get_scores_in_batches(model_base.model, harmful_val,
+                                                 model_base.tokenize_instructions_fn, model_base.refusal_toks)
+        torch.cuda.empty_cache()  # Clear between datasets
+        
+        harmless_val_scores = get_scores_in_batches(model_base.model, harmless_val,
+                                                  model_base.tokenize_instructions_fn, model_base.refusal_toks)
         harmful_val = filter_examples(harmful_val, harmful_val_scores, 0, lambda x, y: x > y)
         harmless_val = filter_examples(harmful_val, harmless_val_scores, 0, lambda x, y: x < y)
     
