@@ -1,11 +1,10 @@
-# Refusal in Language Models Is Mediated by a Single Direction
+# Refusal in Language Models Across Languages
 
 **Content warning**: This repository contains text that is offensive, harmful, or otherwise inappropriate in nature.
 
-This repository contains code and results accompanying the paper "Refusal in Language Models Is Mediated by a Single Direction".
-In the spirit of scientific reproducibility, we provide code to reproduce the main results from the paper.
+This repository contains code and results accompanying the paper "Refusal in Language Models Is Mediated by a Single Direction", with additional experiments investigating the cross-lingual properties of refusal directions.
 
-- [Paper](https://arxiv.org/abs/2406.11717)
+- [Original Paper](https://arxiv.org/abs/2406.11717)
 - [Blog post](https://www.lesswrong.com/posts/jGuXSZgv6qfdhMCuJ/refusal-in-llms-is-mediated-by-a-single-direction)
 
 ## Setup
@@ -16,8 +15,42 @@ cd refusal_direction
 source setup.sh
 ```
 
-The setup script will prompt you for a HuggingFace token (required to access gated models) and a Together AI token (required to access the Together AI API, which is used for evaluating jailbreak safety scores).
+The setup script will prompt you for:
+- A HuggingFace token (required to access gated models)
+- A Together AI token (required to access the Together AI API, which is used for evaluating jailbreak safety scores)
+- Google Cloud credentials (required for translation - set GOOGLE_APPLICATION_CREDENTIALS environment variable)
+
 It will then set up a virtual environment and install the required packages.
+
+### Setting up Google Cloud Translate API
+
+For multilingual experiments, you need to:
+
+1. Create a Google Cloud account and project
+2. Enable the Cloud Translate API
+3. Create a service account key and download it as JSON
+4. Set the environment variable:
+
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS=/path/to/your-google-credentials.json
+```
+
+## Translation Experiments
+
+We extend the original work to investigate how refusal directions operate across languages. The experiments include:
+
+1. Extracting refusal directions for multiple languages:
+   - High-resource: English, French, Spanish
+   - Medium-resource: German, Russian, Chinese
+   - Low-resource: Thai, Swahili, Amharic
+
+2. Cross-lingual analysis:
+   - Testing how refusal vectors from one language perform on prompts in other languages
+   - Measuring similarity between refusal vectors across languages
+
+3. Visualizations:
+   - Heatmaps of cross-lingual effectiveness
+   - Similarity matrices between refusal directions
 
 ## Reproducing main results
 
@@ -28,25 +61,38 @@ python3 -m pipeline.run_pipeline --model_path {model_path}
 ```
 where `{model_path}` is the path to a HuggingFace model. For example, for Llama-3 8B Instruct, the model path would be `meta-llama/Meta-Llama-3-8B-Instruct`.
 
-The pipeline performs the following steps:
-1. Extract candiate refusal directions
-    - Artifacts will be saved in `pipeline/runs/{model_alias}/generate_directions`
-2. Select the most effective refusal direction
-    - Artifacts will be saved in `pipeline/runs/{model_alias}/select_direction`
-    - The selected refusal direction will be saved as `pipeline/runs/{model_alias}/direction.pt`
-3. Generate completions over harmful prompts, and evaluate refusal metrics.
-    - Artifacts will be saved in `pipeline/runs/{model_alias}/completions`
-4. Generate completions over harmless prompts, and evaluate refusal metrics.
-    - Artifacts will be saved in `pipeline/runs/{model_alias}/completions`
-5. Evaluate CE loss metrics.
-    - Artifacts will be saved in `pipeline/runs/{model_alias}/loss_evals`
+For Qwen models, you can run:
+```bash
+python3 -m pipeline.run_pipeline --model_path Qwen/Qwen-7B-Chat  # Qwen1 model
+python3 -m pipeline.run_pipeline --model_path Qwen/Qwen2-7B-Instruct  # Qwen2 model
+```
 
-For convenience, we have included pipeline artifacts for the smallest model in each model family:
-- [`qwen/qwen-1_8b-chat`](/pipeline/runs/qwen-1_8b-chat/)
-- [`google/gemma-2b-it`](/pipeline/runs/gemma-2b-it/)
-- [`01-ai/yi-6b-chat`](/pipeline/runs/yi-6b-chat/)
-- [`meta-llama/llama-2-7b-chat-hf`](/pipeline/runs/llama-2-7b-chat-hf/)
-- [`meta-llama/meta-llama-3-8b-instruct`](/pipeline/runs/meta-llama-3-8b-instruct/)
+The pipeline performs the following steps:
+1. Extract candiate refusal directions across languages
+2. Select the most effective refusal direction for each language
+3. Generate completions over harmful and harmless prompts, and evaluate refusal metrics for each language
+4. Perform cross-lingual analysis by applying refusal vectors from one language to prompts in other languages
+5. Analyze similarities between refusal vectors across languages
+
+Artifacts will be stored in language-specific directories:
+- `pipeline/runs/{model_alias}/lang_{language_code}/`
+
+Cross-lingual analysis results are stored in:
+- `pipeline/runs/{model_alias}/cross_lingual/`
+
+Vector similarity analysis results are stored in:
+- `pipeline/runs/{model_alias}/vector_similarity/`
+
+## Memory Optimization
+
+The multilingual experiments may require significant GPU memory, especially for:
+- Languages with non-Latin scripts (requiring more tokens per text)
+- Larger models (7B+)
+
+If you encounter OOM (Out of Memory) errors, consider:
+1. Using fewer languages: `--languages en,fr,th`
+2. Using a smaller model (Gemma-2B, Qwen-1.8B)
+3. Reducing batch sizes in the config
 
 ## Minimal demo Colab
 

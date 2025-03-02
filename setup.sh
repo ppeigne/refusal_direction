@@ -40,12 +40,12 @@ setup_hf() {
     fi
 }
 
-setup_together() {
-    echo "Please enter your Together AI token (press Enter to skip):"
+setup_openrouter() {
+    echo "Please enter your OpenRouter API key (press Enter to skip):"
     read -r token
     if [ -n "$token" ]; then
-        echo "Storing TOGETHER_API_KEY in .env file..."
-        echo "TOGETHER_API_KEY=$token" >> .env
+        echo "Storing OPENROUTER_API_KEY in .env file..."
+        echo "OPENROUTER_API_KEY=$token" >> .env
     else
         echo "No token entered. Skipping..."
     fi
@@ -78,7 +78,7 @@ if [ $? -ne 0 ]; then
 fi
 
 setup_hf
-setup_together
+setup_openrouter
 setup_venv
 install_requirements
 
